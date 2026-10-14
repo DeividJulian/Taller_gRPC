@@ -1,0 +1,180 @@
+// =============================================================================
+//  Contrato gRPC del sistema de chat colaborativo (Contract-First)
+//  Este archivo es la ÚNICA fuente de verdad (SSOT): a partir de él se genera
+//  el código TypeScript del servidor, del cliente web y del cliente de terminal.
+// =============================================================================
+syntax = "proto3";
+
+package chat.v1;
+
+// ---------------------------------------------------------------------------
+// Modelos de dominio
+// ---------------------------------------------------------------------------
+
+message User {
+  string id = 1;     // identificador único de la sesión del usuario
+  string name = 2;   // nombre visible
+  string color = 3;  // color del avatar (hex)
+}
+
+message Channel {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message Attachment {
+  string id = 1;
+  string file_name = 2;
+  string mime_type = 3;
+  int64 size = 4;     // bytes
+}
+
+message ChatMessage {
+  string id = 1;
+  string channel_id = 2;
+  User author = 3;
+  string text = 4;
+  optional Attachment attachment = 5;
+  int64 sent_at = 6;  // epoch en milisegundos
+  bool system = 7;    // true = aviso del sistema ("X se unió al canal")
+}
+
+// ---------------------------------------------------------------------------
+// Eventos en tiempo real
+// ---------------------------------------------------------------------------
+
+// Indicador "está escribiendo..."
+message TypingEvent {
+  string channel_id = 1;
+  User user = 2;
+  bool is_typing = 3;
+}
+
+// Lista de usuarios conectados a un canal
+message PresenceEvent {
+  string channel_id = 1;
+  repeated User users = 2;
+}
+
+// Lo que el SERVIDOR empuja hacia los clientes
+message ServerEvent {
+  oneof event {
+    ChatMessage message = 1;
+    TypingEvent typing = 2;
+    PresenceEvent presence = 3;
+    Heartbeat heartbeat = 4;
+  }
+}
+
+// Latido periódico: mantiene viva la conexión a través de proxies de la nube
+message Heartbeat {
+  int64 server_time = 1;
+}
+
+// Lo que un CLIENTE envía por el stream bidireccional
+message ClientEvent {
+  oneof event {
+    JoinChannel join = 1;      // primer mensaje obligatorio
+    SendText send = 2;
+    SetTyping typing = 3;
+  }
+}
+
+message JoinChannel {
+  string channel_id = 1;
+  User user = 2;
+}
+
+message SendText {
+  string text = 1;
+}
+
+message SetTyping {
+  bool is_typing = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Requests / responses de los RPC unarios y server-streaming
+// ---------------------------------------------------------------------------
+
+message ListChannelsRequest {}
+message ListChannelsResponse {
+  repeated Channel channels = 1;
+}
+
+message GetHistoryRequest {
+  string channel_id = 1;
+  int32 limit = 2;
+}
+message GetHistoryResponse {
+  repeated ChatMessage messages = 1;
+}
+
+message SubscribeRequest {
+  string channel_id = 1;
+  User user = 2;
+}
+
+message SendMessageRequest {
+  string channel_id = 1;
+  User author = 2;
+  string text = 3;
+  string attachment_id = 4;  // opcional: id devuelto por UploadAttachment
+}
+
+message TypingRequest {
+  string channel_id = 1;
+  User user = 2;
+  bool is_typing = 3;
+}
+message TypingResponse {}
+
+message UploadAttachmentRequest {
+  string file_name = 1;
+  string mime_type = 2;
+  bytes data = 3;            // contenido binario del archivo (Protobuf lo envía tal cual, sin base64)
+}
+
+// Long-polling (respaldo cuando una red/antivirus retiene los streams)
+message PollEventsRequest {
+  string channel_id = 1;
+  User user = 2;
+  string session_id = 3;   // identifica la "suscripción virtual" entre llamadas
+}
+message PollEventsResponse {
+  repeated ServerEvent events = 1;
+}
+
+message DownloadAttachmentRequest {
+  string id = 1;
+}
+message DownloadAttachmentResponse {
+  Attachment attachment = 1;
+  bytes data = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Servicio
+// ---------------------------------------------------------------------------
+service ChatService {
+  // ★ STREAMING BIDIRECCIONAL ★
+  // Cliente y servidor envían y reciben eventos de forma simultánea y continua
+  // sobre UNA sola conexión HTTP/2. Lo usan los clientes nativos (CLI).
+  rpc Chat(stream ClientEvent) returns (stream ServerEvent);
+
+  // Server-streaming: el navegador recibe en tiempo real (gRPC-Web).
+  rpc Subscribe(SubscribeRequest) returns (stream ServerEvent);
+
+  // Respaldo unario (long-polling): espera hasta ~20 s a que haya eventos y
+  // los devuelve en lote. Se usa solo si algo en la red bloquea los streams.
+  rpc PollEvents(PollEventsRequest) returns (PollEventsResponse);
+
+  // Unarios
+  rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
+  rpc GetHistory(GetHistoryRequest) returns (GetHistoryResponse);
+  rpc SendMessage(SendMessageRequest) returns (ChatMessage);
+  rpc SetTyping(TypingRequest) returns (TypingResponse);
+  rpc UploadAttachment(UploadAttachmentRequest) returns (Attachment);
+  rpc DownloadAttachment(DownloadAttachmentRequest) returns (DownloadAttachmentResponse);
+}

@@ -1,0 +1,11 @@
+# Blueprint para Render (alternativa gratuita sin tarjeta).
+# Render expone el servicio por HTTPS y lo reenvía al contenedor por HTTP/1.1:
+# la app web (gRPC-Web) funciona completa; el cliente CLI bidireccional
+# se demuestra en local o en Cloud Run (ver README).
+services:
+  - type: web
+    name: grpc-chat
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
